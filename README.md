@@ -43,7 +43,7 @@ All geometry is computed locally in your browser using a Web Worker — no serve
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/lamp-generator.git
+git clone https://github.com/KaeShoru/lamp-generator.git
 cd lamp-generator
 
 # Install dependencies
@@ -131,7 +131,7 @@ public/
 
 ```bash
 # Клонируйте репозиторий
-git clone https://github.com/YOUR_USERNAME/lamp-generator.git
+git clone https://github.com/KaeShoru/lamp-generator.git
 cd lamp-generator
 
 # Установите зависимости
