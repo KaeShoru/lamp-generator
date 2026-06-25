@@ -1,0 +1,71 @@
+# ════════════════════════════════════════════════════════════════════
+#  .railwayignore — files NOT uploaded to Railway at deploy time
+#
+#  Railway CLI uses this like .dockerignore but for `railway up`.
+#  Keeping the upload small = faster deploys.
+# ════════════════════════════════════════════════════════════════════
+
+# Dependencies (rebuilt in Docker)
+node_modules/
+server/node_modules/
+
+# Build artifacts (rebuilt in Docker)
+dist/
+dist-ssr/
+build/
+
+# Tests + coverage (not needed in production)
+**/*.test.ts
+**/*.test.tsx
+**/*.test.mjs
+**/*.spec.ts
+coverage/
+.nyc_output/
+
+# Scripts not needed at runtime (frontend build scripts)
+# NOTE: obfuscate.mjs IS needed at build stage (called by build:obfuscated)
+scripts/deploy-railway.mjs
+scripts/launcher.mjs
+
+# Local dev-only files
+.env
+.env.local
+.env.production
+.gitignore
+.gitattributes
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.suo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Lockfiles we don't use
+yarn.lock
+pnpm-lock.yaml
+
+# Local Railway state (project link) — Railway re-creates as needed
+.railway/
+
+# Local runtime files
+.lamp-generator.lock.json
+uploads/
+tmp/
+
+# Docs (kept in repo, not needed at runtime)
+README.md
+*.md
+.github/
+
+# Desktop shortcuts (Windows-only, dev convenience)
+create-desktop-shortcut.ps1
+create-shortcut.cmd
+run-dev.cmd
+run-dev.ps1
+diagnose-cmd.ps1

@@ -25,3 +25,36 @@ dist-ssr
 
 # Lamp generator runtime lock
 .lamp-generator.lock.json
+
+# Secrets — NEVER commit
+.env
+.env.local
+.env.production
+*.pem
+*.key
+
+# Backend runtime
+server/node_modules/
+uploads/
+tmp/
+server.err
+server.out
+
+# Editor / IDE
+.vscode/
+.idea/
+*.code-workspace
+.DS_Store
+
+# Build artifacts
+dist/
+dist-ssr/
+build/
+
+# Logs
+logs/
+*.log
+
+# Lockfiles (keep package-lock.json)
+yarn.lock
+pnpm-lock.yaml

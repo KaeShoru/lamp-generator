@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { ShadeParams } from './types'
+import { BASE_RADIUS, MAX_RADIUS, MIN_WALL_THICKNESS, PLUG_HOLE_RADIUS, PLUG_SEAL_THICKNESS, T_RIDGE_WIDTH } from './constants'
 
 function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v))
@@ -19,13 +20,14 @@ function smoothstep(edge0: number, edge1: number, x: number) {
   return t * t * (3 - 2 * t)
 }
 
-function profileRadius(params: ShadeParams, t: number) {
-  const baseR = params.baseDiameter / 2
-  const topR = params.topDiameter / 2
+function profileRadius(params: ShadeParams, t: number, baseR: number, maxR: number) {
+  const topR = clamp(params.topDiameter / 2, 1, maxR)
   const linear = lerp(baseR, topR, t)
   const bulge = params.bulgeMm * gaussian(t, params.bulgePos, 0.18)
   const waist = -params.waistMm * gaussian(t, params.waistPos, 0.16)
-  return Math.max(1, linear + bulge + waist)
+  // Hard cap at maxR (printer build-volume limit for outer;
+  // outer.topDiameter/2 − margin for inner)
+  return clamp(linear + bulge + waist, 1, maxR)
 }
 
 function twistAt(params: ShadeParams, t: number) {
@@ -74,6 +76,7 @@ function patternDelta(params: ShadeParams, theta: number, t: number, mirror = fa
       // T-ridges are generated as separate geometry, not via radius modulation
       return 0
     default:
+      // 'none' and any unknown pattern → smooth surface (no modulation)
       return 0
   }
 }
@@ -112,33 +115,86 @@ function veinDelta(params: ShadeParams, theta: number, t: number) {
   return bump - valley * valleyFactor
 }
 
-export function buildShadeGeometry(params: ShadeParams, extraSmoothPasses = 0) {
-  const thickness = Math.max(0.8, params.thickness)
+export type BuildOptions = {
+  /**
+   * Optional static bottom geometry (non-indexed XYZ positions, 9 floats per triangle).
+   * When provided, REPLACES the parametric plug entirely — caller is responsible
+   * for orientation/centering (typically the STL is already centered at (0,0) in
+   * X/Z and rests at y=0 extending downward, like a real lamp base).
+   */
+  externalBottom?: Float32Array | null
+  /**
+   * Normals matching `externalBottom` (non-indexed XYZ, same length). When
+   * omitted but externalBottom is provided, normals default to (0,1,0) which
+   * will look wrong — always pass the STL's precomputed normals.
+   *
+   * WHY THIS EXISTS: `computeVertexNormals()` averages normals across all
+   * triangles sharing a vertex position. At the seam between the shade's
+   * bottom ring (y=0) and the STL plug's top rim (also y=0), vertices coincide
+   * — averaging produces wrong normals → gray/dark polygons on the seam.
+   * Passing precomputed normals for the STL part avoids the cross-contamination:
+   * parametric geometry gets `computeVertexNormals()`, STL gets its own normals.
+   */
+  externalBottomNormals?: Float32Array | null
+  /**
+   * Override the base radius (defaults to BASE_RADIUS = 75 mm).
+   * Used for the INNER shade in double-shade mode (= INNER_BASE_RADIUS = 50 mm).
+   * The base blend filter, profile, and bottom plug all key off this value.
+   */
+  baseRadiusOverride?: number | null
+  /**
+   * Vertical offset added to every generated Y coordinate (defaults to 0).
+   * Used to lift the INNER shade so its base sits on top of the outer plug
+   * (INNER_BASE_Y_OFFSET = 2 mm).
+   */
+  yOffset?: number
+  /**
+   * Hard maximum radius (mm) — every generated radius (profile, bulge, waist,
+   * veins, patterns) is clamped to [1, maxRadius]. Used for the INNER shade:
+   * guarantees it physically fits INSIDE the outer shade (maxRadius =
+   * outer.topDiameter/2 − INNER_TOP_DIAMETER_MARGIN/2) regardless of how
+   * aggressive bulge/veins are.
+   *
+   * When omitted, falls back to MAX_RADIUS (printer build-volume limit).
+   */
+  maxRadius?: number | null
+}
+
+export function buildShadeGeometry(params: ShadeParams, extraSmoothPasses = 0, options: BuildOptions = {}) {
+  const externalBottom = options.externalBottom ?? null
+  const baseR = options.baseRadiusOverride && options.baseRadiusOverride > 0
+    ? options.baseRadiusOverride
+    : BASE_RADIUS
+  const yOffset = options.yOffset ?? 0
+  // Hard radius cap. MAX_RADIUS is the printer limit; the inner shade overrides
+  // this with a tighter cap so it can never poke through the outer's wall.
+  const maxR = options.maxRadius && options.maxRadius > 0 ? options.maxRadius : MAX_RADIUS
+  // Wall thickness is hard-floored at MIN_WALL_THICKNESS (1.2 mm) —
+  // anything thinner is too fragile for 3D printing and translucent diffusion.
+  const thickness = Math.max(MIN_WALL_THICKNESS, params.thickness)
   const height = Math.max(10, params.height)
-  const baseDiameter = Math.max(6, params.baseDiameter)
-  const topDiameter = Math.max(4, params.topDiameter)
+  // baseDiameter is fixed at 150 mm (BASE_DIAMETER) — see constants.ts
+  const topDiameter = clamp(params.topDiameter, 4, maxR * 2)
 
   const normalized: ShadeParams = {
     ...params,
     height,
-    baseDiameter,
     topDiameter,
     thickness,
   }
 
   const radialSegments = clamp(Math.round(normalized.radialSegments), 12, 400)
   const heightSegments = clamp(Math.round(normalized.heightSegments), 4, 240)
-  const maxOverhangRad = THREE.MathUtils.degToRad(clamp(normalized.maxOverhangDeg, 5, 89))
-  const dy = height / heightSegments
-  const maxDelta = dy * Math.tan(maxOverhangRad)
 
-  // Radii grid (no seam duplicate); enforce overhang per-theta along height.
+  // Radii grid (no seam duplicate).
+  // NOTE: maxOverhangDeg has been removed — overhang is now controlled by
+  // user-facing profile parameters (bulge / waist / topDiameter) directly.
   const rGrid: number[][] = Array.from({ length: heightSegments + 1 }, () =>
     Array.from({ length: radialSegments }, () => 0),
   )
   for (let i = 0; i <= heightSegments; i++) {
     const t = i / heightSegments
-    const base = profileRadius(normalized, t)
+    const base = profileRadius(normalized, t, baseR, maxR)
     for (let j = 0; j < radialSegments; j++) {
       const theta = (j / radialSegments) * Math.PI * 2
       // Order: profile → veins (part of form) → pattern (texture) → mirror pattern
@@ -149,20 +205,17 @@ export function buildShadeGeometry(params: ShadeParams, extraSmoothPasses = 0) {
       const mirror = normalized.patternMirror ? patternDelta(normalized, mirrorTheta, t, true) : 0
       // Clamp combined pattern depth to ±amp (no doubling at crossings)
       const amp = normalized.patternAmpMm
-      // Edge taper for non-T patterns to prevent elephant foot (optional)
-      const edgeFade = normalized.patternEdgeFade ? smoothstep(0, 0.08, t) * smoothstep(0, 0.08, 1 - t) : 1
-      const combined = clamp((pat + mirror) * edgeFade, -amp, amp)
-      rGrid[i][j] = Math.max(1, base + veins + combined)
-    }
-  }
-  for (let j = 0; j < radialSegments; j++) {
-    for (let i = 1; i <= heightSegments; i++) {
-      const prev = rGrid[i - 1][j]
-      let cur = rGrid[i][j]
-      const d = cur - prev
-      if (d > maxDelta) cur = prev + maxDelta
-      if (d < -maxDelta) cur = prev - maxDelta
-      rGrid[i][j] = Math.max(1, cur)
+      // Top edge fade is optional (user-controlled via patternEdgeFade).
+      // Bottom fade is applied later as a SEPARATE FILTER pass (see below) — this
+      // is critical: it guarantees a smooth, perfectly circular base WITHOUT
+      // producing a "step" or "lip" that the previous multiplicative approach did.
+      const topFade = normalized.patternEdgeFade ? smoothstep(0, 0.08, 1 - t) : 1
+      const veinsFaded = veins * topFade
+      const combined = clamp((pat + mirror) * topFade, -amp, amp)
+      // Hard clamp at maxR (printer build-volume limit for outer;
+      // outer.topDiameter/2 − margin for inner — guarantees inner never
+      // intersects outer's inner wall even with maximum bulge/veins).
+      rGrid[i][j] = clamp(base + veinsFaded + combined, 1, maxR)
     }
   }
 
@@ -186,7 +239,7 @@ export function buildShadeGeometry(params: ShadeParams, extraSmoothPasses = 0) {
           rGrid[i][jp]
         ) / 6
         // Blend 50/50 between original and smoothed to preserve detail
-        smoothed[i][j] = Math.max(1, (rGrid[i][j] + avg) / 2)
+        smoothed[i][j] = clamp((rGrid[i][j] + avg) / 2, 1, maxR)
       }
     }
     // Also smooth boundary rows to prevent elephant foot
@@ -195,10 +248,10 @@ export function buildShadeGeometry(params: ShadeParams, extraSmoothPasses = 0) {
       const jp = (j + 1) % radialSegments
       // Row 0: one-sided (only row 1 available above)
       const avg0 = (rGrid[0][j] * 2 + rGrid[1][j] + rGrid[0][jm] + rGrid[0][jp]) / 5
-      smoothed[0][j] = Math.max(1, (rGrid[0][j] + avg0) / 2)
+      smoothed[0][j] = clamp((rGrid[0][j] + avg0) / 2, 1, maxR)
       // Row heightSegments: one-sided (only row heightSegments-1 available below)
       const avgN = (rGrid[heightSegments][j] * 2 + rGrid[heightSegments-1][j] + rGrid[heightSegments][jm] + rGrid[heightSegments][jp]) / 5
-      smoothed[heightSegments][j] = Math.max(1, (rGrid[heightSegments][j] + avgN) / 2)
+      smoothed[heightSegments][j] = clamp((rGrid[heightSegments][j] + avgN) / 2, 1, maxR)
     }
     for (let i = 0; i <= heightSegments; i++) {
       for (let j = 0; j < radialSegments; j++) {
@@ -207,16 +260,49 @@ export function buildShadeGeometry(params: ShadeParams, extraSmoothPasses = 0) {
     }
   }
 
+  // === BOTTOM-BLEND FILTER (always applied) ===
+  // The bottom ring MUST be a perfect circle of BASE_RADIUS (75 mm) so that the
+  // bottom plug seals watertight and the shade sits flat on the printer bed.
+  //
+  // Previously this was done by zeroing pattern/vein contributions at i=0 and
+  // hard-snapping rGrid[0] to BASE_RADIUS. That produced a visible "step" / "lip"
+  // because row 1 still had its full bulge/veins — a discontinuity.
+  //
+  // New approach: apply a SMOOTH blend over the bottom ~12% of rows that pulls
+  // every radius linearly toward BASE_RADIUS. row 0 → fully BASE_RADIUS,
+  // row fadeRows → unchanged. In between, smoothstep guarantees C¹ continuity,
+  // so there is no kink even with strong bulge/waist/veins nearby.
+  //
+  // This filter runs AFTER smoothing, so smoothing cannot re-introduce leaks.
+  // It also implicitly fades VEINS at the bottom (their radius gets pulled in).
+  // For T-ridges (separate geometry), see the ridgeH fade below.
+  {
+    const fadeRows = Math.max(2, Math.round(heightSegments * 0.12))
+    for (let i = 0; i <= fadeRows && i <= heightSegments; i++) {
+      const blend = smoothstep(0, 1, i / fadeRows)  // 0 at row 0, 1 at row fadeRows
+      for (let j = 0; j < radialSegments; j++) {
+        const natural = rGrid[i][j]
+        rGrid[i][j] = baseR + (natural - baseR) * blend
+      }
+    }
+  }
+
   const pos: number[] = []
+  // Track which vertices belong to the parametric shade (vs. the external STL
+  // plug). Used at the end to selectively compute normals only for parametric
+  // triangles — STL normals are passed in via `externalBottomNormals` to avoid
+  // cross-contamination at the y=0 seam (which is what produced gray polygons).
+  const paramVertexCount = { value: 0 }
 
   const pushTri = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, cx: number, cy: number, cz: number) => {
     pos.push(ax, ay, az, bx, by, bz, cx, cy, cz)
+    paramVertexCount.value += 3
   }
 
   const v = (r: number, theta: number, y: number) => {
     const x = r * Math.cos(theta)
     const z = r * Math.sin(theta)
-    return [x, y, z] as const
+    return [x, y + yOffset, z] as const
   }
 
   // Outer surface
@@ -315,17 +401,28 @@ export function buildShadeGeometry(params: ShadeParams, extraSmoothPasses = 0) {
   // Top cap (always thin, solid)
   addCap(height, 0, true)
 
-  // Bottom plug: thick base seal + bottom circle
-  if (normalized.bottomPlug) {
-    const plugT = Math.max(0.6, normalized.bottomPlugThickness)
-    const plugHoleR = Math.max(0, (normalized.bottomPlugHoleDiameter ?? 0) / 2)
-    const plugShape = normalized.bottomPlugShape ?? 'follow'
-    const plugCircleR = Math.max(1, (normalized.bottomPlugDiameter ?? baseDiameter) / 2)
+  // Bottom plug: when externalBottom is provided (a static STL loaded from disk),
+  // it REPLACES the parametric plug completely. Otherwise fall back to the
+  // parametric plug (annular seal with central wiring hole).
+  if (externalBottom && externalBottom.length >= 9) {
+    // Append the external geometry positions, APPLYING yOffset to every Y
+    // coordinate. Without this, the inner shade's STL plug stays at y=0
+    // while the parametric body lifts to y=yOffset — the plug "sinks" into
+    // the outer shade instead of sitting on top of it.
+    // Every 3rd float (index 1, 4, 7, ...) is a Y coordinate.
+    for (let i = 0; i < externalBottom.length; i += 3) {
+      pos.push(externalBottom[i])
+      pos.push(externalBottom[i + 1] + yOffset)
+      pos.push(externalBottom[i + 2])
+    }
+  } else {
+    // Parametric plug fallback (used by tests and when no STL is loaded yet)
+    const plugT = PLUG_SEAL_THICKNESS
+    const plugHoleR = PLUG_HOLE_RADIUS  // fixed 20 mm — always present
     const yTop = 0
     const yBot = -plugT
 
-    // === THICK BASE SEAL ===
-    // Top face at y=0 (facing up)
+    // === TOP FACE OF SEAL (y=0, facing up) ===
     for (let j = 0; j < radialSegments; j++) {
       const j1 = (j + 1) % radialSegments
       const th0 = (j / radialSegments) * Math.PI * 2
@@ -344,7 +441,7 @@ export function buildShadeGeometry(params: ShadeParams, extraSmoothPasses = 0) {
       pushTri(o1[0], o1[1], o1[2], i0[0], i0[1], i0[2], i1[0], i1[1], i1[2])
     }
 
-    // Bottom face of thick seal at yBot (facing down)
+    // === BOTTOM FACE OF SEAL (y=yBot, facing down) ===
     for (let j = 0; j < radialSegments; j++) {
       const j1 = (j + 1) % radialSegments
       const th0 = (j / radialSegments) * Math.PI * 2
@@ -363,7 +460,7 @@ export function buildShadeGeometry(params: ShadeParams, extraSmoothPasses = 0) {
       pushTri(i1[0], i1[1], i1[2], i0[0], i0[1], i0[2], o1[0], o1[1], o1[2])
     }
 
-    // Outer wall of thick seal (vertical wall at lamp surface)
+    // === OUTER WALL OF SEAL (vertical wall at lamp surface) ===
     for (let j = 0; j < radialSegments; j++) {
       const j1 = (j + 1) % radialSegments
       const th0 = (j / radialSegments) * Math.PI * 2
@@ -380,7 +477,7 @@ export function buildShadeGeometry(params: ShadeParams, extraSmoothPasses = 0) {
       pushTri(b[0], b[1], b[2], d[0], d[1], d[2], c[0], c[1], c[2])
     }
 
-    // Inner wall of thick seal (at plugHoleR, only if hole exists)
+    // === INNER WALL OF SEAL (at plugHoleR, around the wiring hole) ===
     if (plugHoleR > 0) {
       for (let j = 0; j < radialSegments; j++) {
         const j1 = (j + 1) % radialSegments
@@ -397,83 +494,8 @@ export function buildShadeGeometry(params: ShadeParams, extraSmoothPasses = 0) {
         pushTri(c[0], c[1], c[2], d[0], d[1], d[2], b[0], b[1], b[2])
       }
     }
-
-    // === BOTTOM CIRCLE DISC (only for 'circle' shape) ===
-    if (plugShape === 'circle') {
-      const discT = Math.max(0.6, normalized.bottomPlugDiscThickness ?? thickness)
-      const discTop = yBot
-      const discBot = yBot - discT
-
-      // Top face of disc (facing up, from holeR to plugCircleR)
-      for (let j = 0; j < radialSegments; j++) {
-        const j1 = (j + 1) % radialSegments
-        const th0 = (j / radialSegments) * Math.PI * 2
-        const th1 = (j1 / radialSegments) * Math.PI * 2
-        const rOuter0 = plugCircleR
-        const rOuter1 = plugCircleR
-        const rInner0 = Math.max(0.8, plugHoleR)
-        const rInner1 = Math.max(0.8, plugHoleR)
-
-        const o0 = v(rOuter0, th0, discTop)
-        const o1 = v(rOuter1, th1, discTop)
-        const i0 = v(rInner0, th0, discTop)
-        const i1 = v(rInner1, th1, discTop)
-
-        pushTri(o0[0], o0[1], o0[2], i0[0], i0[1], i0[2], o1[0], o1[1], o1[2])
-        pushTri(o1[0], o1[1], o1[2], i0[0], i0[1], i0[2], i1[0], i1[1], i1[2])
-      }
-
-      // Bottom face of disc (facing down)
-      for (let j = 0; j < radialSegments; j++) {
-        const j1 = (j + 1) % radialSegments
-        const th0 = (j / radialSegments) * Math.PI * 2
-        const th1 = (j1 / radialSegments) * Math.PI * 2
-
-        const o0 = v(plugCircleR, th0, discBot)
-        const o1 = v(plugCircleR, th1, discBot)
-        const i0 = v(Math.max(0.8, plugHoleR), th0, discBot)
-        const i1 = v(Math.max(0.8, plugHoleR), th1, discBot)
-
-        pushTri(o1[0], o1[1], o1[2], i0[0], i0[1], i0[2], o0[0], o0[1], o0[2])
-        pushTri(i1[0], i1[1], i1[2], i0[0], i0[1], i0[2], o1[0], o1[1], o1[2])
-      }
-
-      // Outer rim of disc
-      for (let j = 0; j < radialSegments; j++) {
-        const j1 = (j + 1) % radialSegments
-        const th0 = (j / radialSegments) * Math.PI * 2
-        const th1 = (j1 / radialSegments) * Math.PI * 2
-
-        const a = v(plugCircleR, th0, discBot)
-        const b = v(plugCircleR, th0, discTop)
-        const c = v(plugCircleR, th1, discBot)
-        const d = v(plugCircleR, th1, discTop)
-
-        pushTri(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2])
-        pushTri(b[0], b[1], b[2], d[0], d[1], d[2], c[0], c[1], c[2])
-      }
-
-      // Inner rim of disc hole (if hole exists)
-      if (plugHoleR > 0) {
-        for (let j = 0; j < radialSegments; j++) {
-          const j1 = (j + 1) % radialSegments
-          const th0 = (j / radialSegments) * Math.PI * 2
-          const th1 = (j1 / radialSegments) * Math.PI * 2
-
-          const a = v(plugHoleR, th0, discBot)
-          const b = v(plugHoleR, th0, discTop)
-          const c = v(plugHoleR, th1, discBot)
-          const d = v(plugHoleR, th1, discTop)
-
-          pushTri(c[0], c[1], c[2], b[0], b[1], b[2], a[0], a[1], a[2])
-          pushTri(c[0], c[1], c[2], d[0], d[1], d[2], b[0], b[1], b[2])
-        }
-      }
-    }
-  } else {
-    // Standard thin base cap (always sealed, solid)
-    addCap(0, 0, false)
   }
+  // ↑ closes the `else` branch (parametric plug fallback)
 
   // Helper: sample rGrid at arbitrary (row, theta) with linear interpolation
   const sampleR = (row: number, theta: number): number => {
@@ -500,6 +522,20 @@ export function buildShadeGeometry(params: ShadeParams, extraSmoothPasses = 0) {
       }
     }
 
+    // Fade zone for ridges — same as the bottom-blend filter, plus optional top fade.
+    // This ensures T-ridges also melt smoothly into the circular base (no "step"
+    // where the ridge suddenly disappears at y=0).
+    const fadeRows = Math.max(2, Math.round(heightSegments * 0.12))
+    const ridgeFadeAt = (i: number): number => {
+      // Bottom fade (always): 0 at row 0, 1 at row fadeRows.
+      const bot = smoothstep(0, 1, Math.min(i, fadeRows) / fadeRows)
+      // Top fade (optional): symmetric.
+      const top = normalized.patternEdgeFade
+        ? smoothstep(0, 1, Math.min(heightSegments - i, fadeRows) / fadeRows)
+        : 1
+      return bot * top
+    }
+
     for (let ri = 0; ri < ridgeAngles.length; ri++) {
       const thetaC = ridgeAngles[ri]
       const isMirror = ri >= ridgeCount
@@ -512,12 +548,21 @@ export function buildShadeGeometry(params: ShadeParams, extraSmoothPasses = 0) {
         // For base ridges: grid theta = thetaC (world angle = thetaC + twist, grid = world - twist)
         const gridTh0 = isMirror ? thetaC - 2 * twistAt(normalized, t0) : thetaC
         const gridTh1 = isMirror ? thetaC - 2 * twistAt(normalized, t1) : thetaC
-        // Sample actual surface (with veins) from rGrid
+        // Sample actual surface (with veins, already faded at bottom) from rGrid
         const rB0 = sampleR(i, gridTh0)
         const rB1 = sampleR(i + 1, gridTh1)
-        const hw0 = Math.min(thickness / (2 * Math.max(1, rB0)), Math.PI / ridgeCount * 0.45)
-        const hw1 = Math.min(thickness / (2 * Math.max(1, rB1)), Math.PI / ridgeCount * 0.45)
-        const rT0 = rB0 + ridgeH, rT1 = rB1 + ridgeH
+        // Fade ridge HEIGHT at both ends so ridges melt into the surface instead
+        // of producing a hard step at the bottom or top ring.
+        const ridgeH0 = ridgeH * ridgeFadeAt(i)
+        const ridgeH1 = ridgeH * ridgeFadeAt(i + 1)
+        // T-ridge width is FIXED at T_RIDGE_WIDTH (1.2 mm, arc length at base).
+        // Convert mm → radians using the local surface radius rB*:
+        //   arc_length = r * angle  →  angle = arc_length / r
+        // This gives every ridge a consistent physical width regardless of how
+        // many ridges are configured or how bulged the surface is.
+        const hw0 = Math.min((T_RIDGE_WIDTH / 2) / Math.max(1, rB0), Math.PI / ridgeCount * 0.45)
+        const hw1 = Math.min((T_RIDGE_WIDTH / 2) / Math.max(1, rB1), Math.PI / ridgeCount * 0.45)
+        const rT0 = clamp(rB0 + ridgeH0, 1, maxR), rT1 = clamp(rB1 + ridgeH1, 1, maxR)
         const tl0 = thetaC - hw0, tr0 = thetaC + hw0
         const tl1 = thetaC - hw1, tr1 = thetaC + hw1
         // 4 outer-edge vertices (at ridge top)
@@ -553,10 +598,63 @@ export function buildShadeGeometry(params: ShadeParams, extraSmoothPasses = 0) {
     }
   }
 
+  // === Normals ===
+  // Two-track strategy to prevent the gray-polygon artifact at the seam:
+  //   1. Parametric shade vertices: compute fresh via computeVertexNormals().
+  //      This only averages normals WITHIN the parametric part — the STL
+  //      vertices are not yet in the geometry when this runs.
+  //   2. STL vertices: append their precomputed normals (loaded from the STL
+  //      file by loadBaseSTL). If absent, fall back to (0,-1,0) — better
+  //      than wrong averaging.
+  const paramFloatCount = paramVertexCount.value * 3  // ×3 because Float32Array is XYZ-packed
+  const normalArray = new Float32Array(pos.length)
+
+  // Build a temporary parametric-only geometry to compute its normals cleanly.
+  const paramPos = new Float32Array(paramFloatCount)
+  for (let i = 0; i < paramFloatCount; i++) paramPos[i] = pos[i]
+  const paramGeo = new THREE.BufferGeometry()
+  paramGeo.setAttribute('position', new THREE.Float32BufferAttribute(paramPos, 3))
+  paramGeo.computeVertexNormals()
+  const paramNormals = (paramGeo.getAttribute('normal').array as Float32Array)
+  for (let i = 0; i < paramNormals.length; i++) normalArray[i] = paramNormals[i]
+  paramGeo.dispose()
+
+  // Append STL normals (if provided).
+  if (externalBottom && externalBottom.length >= 9) {
+    const stlNormals = options.externalBottomNormals
+    const stlVertCount = (externalBottom.length / 3) | 0
+    if (stlNormals && stlNormals.length === externalBottom.length) {
+      for (let i = 0; i < stlNormals.length; i++) {
+        normalArray[paramFloatCount + i] = stlNormals[i]
+      }
+    } else {
+      // Fallback: face normals computed directly from STL positions.
+      // (Better than nothing, but less smooth than precomputed normals.)
+      for (let t = 0; t < stlVertCount; t += 3) {
+        const i0 = paramFloatCount + t * 3
+        const ax = pos[i0], ay = pos[i0 + 1], az = pos[i0 + 2]
+        const bx = pos[i0 + 3], by = pos[i0 + 4], bz = pos[i0 + 5]
+        const cx = pos[i0 + 6], cy = pos[i0 + 7], cz = pos[i0 + 8]
+        // face normal = (b-a) × (c-a)
+        const ux = bx - ax, uy = by - ay, uz = bz - az
+        const vx = cx - ax, vy = cy - ay, vz = cz - az
+        let nx = uy * vz - uz * vy
+        let ny = uz * vx - ux * vz
+        let nz = ux * vy - uy * vx
+        const len = Math.hypot(nx, ny, nz) || 1
+        nx /= len; ny /= len; nz /= len
+        for (let k = 0; k < 3; k++) {
+          normalArray[i0 + k * 3 + 0] = nx
+          normalArray[i0 + k * 3 + 1] = ny
+          normalArray[i0 + k * 3 + 2] = nz
+        }
+      }
+    }
+  }
+
   const g = new THREE.BufferGeometry()
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
-  g.computeVertexNormals()
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(normalArray, 3))
   g.computeBoundingBox()
   return g
 }
-

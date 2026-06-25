@@ -1,15 +1,16 @@
-export type PatternType = 'ribsRect' | 'wave' | 'accordionTri' | 'groovesRound' | 'groovesT'
+export type PatternType = 'none' | 'ribsRect' | 'wave' | 'accordionTri' | 'groovesRound' | 'groovesT'
 
 export type TwistProfile = 'linear' | 'easeInOut' | 'sine'
 
-export type PlugShape = 'follow' | 'circle'
-
+/**
+ * Parameters for ONE shade (outer or inner). The outer shade uses the full
+ * set; the inner shade reuses the same type but with `veinsEnabled=false`
+ * and `pattern !== 'groovesT'` (these are stripped from the inner UI).
+ */
 export type ShadeParams = {
   /** mm */
   height: number
-  /** mm */
-  baseDiameter: number
-  /** mm */
+  /** mm; base diameter is fixed at 150 mm (BASE_DIAMETER) — see constants.ts */
   topDiameter: number
   /** mm */
   thickness: number
@@ -17,22 +18,10 @@ export type ShadeParams = {
   radialSegments: number
   heightSegments: number
 
-  /** max overhang from vertical, degrees */
-  maxOverhangDeg: number
-
-
-  /** whether to add a bottom plug */
-  bottomPlug: boolean
-  /** shape: follow bottom layer or circular */
-  bottomPlugShape: PlugShape
-  /** mm; diameter of circular plug (only used when shape is 'circle') */
-  bottomPlugDiameter: number
-  /** mm; thickness of the upper plug seal (follows lamp shape) */
-  bottomPlugThickness: number
-  /** mm; thickness of the bottom circle disc (only for 'circle' shape) */
-  bottomPlugDiscThickness: number
-  /** mm; diameter of hole in the bottom plug; 0 = no hole */
-  bottomPlugHoleDiameter: number
+  // NOTE: bottom plug is ALWAYS enabled and ALWAYS follows the lamp's bottom
+  // shape (no separate circle-disc mode anymore). Its thickness is fixed at
+  // PLUG_SEAL_THICKNESS (2.0 mm) — see constants.ts.
+  // NOTE: bottomPlugHoleDiameter is fixed at 40 mm (PLUG_HOLE_DIAMETER) — see constants.ts
 
   /** mm */
   bulgeMm: number
@@ -56,7 +45,8 @@ export type ShadeParams = {
   patternYFreq: number
   /** enable mirrored ribs (cross-hatch grid) */
   patternMirror: boolean
-  /** smooth fade pattern at top/bottom edges to prevent elephant foot */
+  /** smooth fade pattern at TOP edge to prevent elephant foot.
+   *  Bottom fade is ALWAYS applied (guarantees a circular base). */
   patternEdgeFade: boolean
 
   /** enable spiral veins (thick braids around the lamp) */
@@ -75,3 +65,42 @@ export type ShadeParams = {
   veinValleyMm: number
 }
 
+/**
+ * Inner shade parameters (used only when "double shade" mode is on).
+ *
+ * Physically sits INSIDE the outer shade, resting on top of its bottom plug.
+ * Constraints (defined in constants.ts):
+ *   - height = outer.height - INNER_HEIGHT_REDUCTION_MM (always 2 mm shorter)
+ *   - base diameter = INNER_BASE_DIAMETER (fixed 100 mm)
+ *   - top diameter ∈ [INNER_BASE_DIAMETER, outer.topDiameter]
+ *
+ * Per spec, the inner shade has NO veins and NO T-grooves — so it uses the
+ * same `ShadeParams` shape but the builder forces `veinsEnabled=false` and
+ * `pattern !== 'groovesT'`.
+ */
+export type InnerShadeParams = {
+  /** mm; auto-derived from outer height minus INNER_HEIGHT_REDUCTION_MM */
+  height: number
+  /** mm; user-controllable, clamped to [INNER_BASE_DIAMETER, outer.topDiameter] */
+  topDiameter: number
+  /** mm */
+  thickness: number
+  /** profile shape */
+  bulgeMm: number
+  bulgePos: number
+  waistMm: number
+  waistPos: number
+  /** twist */
+  twistDeg: number
+  twistProfile: TwistProfile
+  /** pattern (no T-grooves for inner; 'none' = smooth) */
+  pattern: Exclude<PatternType, 'groovesT'>
+  patternAmpMm: number
+  patternFreq: number
+  patternYFreq: number
+  patternMirror: boolean
+  patternEdgeFade: boolean
+  /** resolution (kept independent so user can lower it for performance) */
+  radialSegments: number
+  heightSegments: number
+}

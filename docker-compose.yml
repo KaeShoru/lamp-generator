@@ -1,0 +1,28 @@
+# ════════════════════════════════════════════════════════════════════
+#  Lamp Generator — local development / testing via Docker Compose
+#
+#  Usage:
+#    1. Copy .env.example to .env, fill in real values.
+#    2. docker compose up --build
+#    3. Open http://localhost:3000
+# ════════════════════════════════════════════════════════════════════
+services:
+  lamp-generator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lamp-generator
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
