@@ -14,6 +14,7 @@ const baseParams: ShadeParams = {
   // and has a fixed thickness (PLUG_SEAL_THICKNESS = 2.0 mm).
   bulgeMm: 18,
   bulgePos: 0.55,
+  bulgeWidth: 0.18,
   waistMm: 10,
   waistPos: 0.35,
   twistDeg: 0,

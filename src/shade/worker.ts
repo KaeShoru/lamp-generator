@@ -86,6 +86,7 @@ function innerToFullParams(inner: InnerShadeParams): ShadeParams {
     heightSegments: inner.heightSegments,
     bulgeMm: inner.bulgeMm,
     bulgePos: inner.bulgePos,
+    bulgeWidth: inner.bulgeWidth ?? 0.18,
     // Inner waist FORCED to 0 per spec.
     waistMm: 0,
     waistPos: 0.4,

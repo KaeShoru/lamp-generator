@@ -27,6 +27,8 @@ export type ShadeParams = {
   bulgeMm: number
   /** 0..1 */
   bulgePos: number
+  /** Gaussian sigma controlling bulge spread (0.05..0.5). Lower = narrower. */
+  bulgeWidth: number
   /** mm */
   waistMm: number
   /** 0..1 */
@@ -88,6 +90,8 @@ export type InnerShadeParams = {
   /** profile shape */
   bulgeMm: number
   bulgePos: number
+  /** Gaussian sigma controlling bulge spread (0.05..0.5). Lower = narrower. */
+  bulgeWidth: number
   waistMm: number
   waistPos: number
   /** twist */

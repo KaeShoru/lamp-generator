@@ -23,7 +23,10 @@ function smoothstep(edge0: number, edge1: number, x: number) {
 function profileRadius(params: ShadeParams, t: number, baseR: number, maxR: number) {
   const topR = clamp(params.topDiameter / 2, 1, maxR)
   const linear = lerp(baseR, topR, t)
-  const bulge = params.bulgeMm * gaussian(t, params.bulgePos, 0.18)
+  // bulgeWidth controls how wide/tall the bulge spreads along the shade.
+  // Default 0.18 (backward-compatible when undefined in old presets).
+  const bulgeSigma = Math.max(0.03, params.bulgeWidth ?? 0.18)
+  const bulge = params.bulgeMm * gaussian(t, params.bulgePos, bulgeSigma)
   const waist = -params.waistMm * gaussian(t, params.waistPos, 0.16)
   // Hard cap at maxR (printer build-volume limit for outer;
   // outer.topDiameter/2 − margin for inner)

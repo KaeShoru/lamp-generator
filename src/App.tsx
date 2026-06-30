@@ -34,7 +34,9 @@ const L: Record<string, Record<Lang, string>> = {
   topDiameter:{ru:'Диаметр верха (мм)',en:'Top diameter (mm)'},
   thickness:{ru:'Толщина стенки (мм)',en:'Wall thickness (mm)'},
   thicknessFixed:{ru:'Зафиксирована 1.2 мм (принтер)',en:'Locked at 1.2 mm (printer)'},
-  bulgeMm:{ru:'Выпуклость (мм)',en:'Bulge (mm)'},bulgePos:{ru:'Позиция выпуклости',en:'Bulge position'},
+  bulgeMm:{ru:'Выпуклость (мм)',en:'Bulge (mm)'},
+  bulgePos:{ru:'Позиция выпуклости',en:'Bulge position'},
+  bulgeWidth:{ru:'Ширина выпуклости',en:'Bulge width'},
   waistMm:{ru:'Талия (мм)',en:'Waist (mm)'},waistPos:{ru:'Позиция талии',en:'Waist position'},
   twistProfile:{ru:'Профиль скрутки',en:'Twist profile'},twistLinear:{ru:'Линейно',en:'Linear'},
   twistEaseInOut:{ru:'Плавно (ease)',en:'Ease in-out'},twistSine:{ru:'Синус',en:'Sine'},
@@ -78,7 +80,9 @@ const L: Record<string, Record<Lang, string>> = {
   doubleShadeEnabled:{ru:'Включить внутренний плафон',en:'Enable inner shade'},
   innerTopDiameter:{ru:'Диаметр верха (мм)',en:'Top diameter (mm)'},
   innerThickness:{ru:'Толщина стенки (мм)',en:'Wall thickness (mm)'},
-  innerBulgeMm:{ru:'Выпуклость (мм)',en:'Bulge (mm)'},innerBulgePos:{ru:'Позиция выпуклости',en:'Bulge position'},
+  innerBulgeMm:{ru:'Выпуклость (мм)',en:'Bulge (mm)'},
+  innerBulgePos:{ru:'Позиция выпуклости',en:'Bulge position'},
+  innerBulgeWidth:{ru:'Ширина выпуклости',en:'Bulge width'},
   innerWaistMm:{ru:'Талия (мм)',en:'Waist (mm)'},innerWaistPos:{ru:'Позиция талии',en:'Waist position'},
   innerTwistProfile:{ru:'Профиль скрутки',en:'Twist profile'},innerTwistDeg:{ru:'Скручивание (°)',en:'Twist (°)'},
   innerPattern:{ru:'Текстура',en:'Pattern'},
@@ -131,7 +135,7 @@ type ExternalBottom = { positions: Float32Array; normals: Float32Array }
 // ─── Preset keys (everything except language/modelColorMode/bulbVisible/customer/order) ──
 const presetKeys = [
   'height','topDiameter',
-  'bulgeMm','bulgePos','waistMm','waistPos','twistDeg','twistProfile','pattern','patternAmpMm',
+  'bulgeMm','bulgePos','bulgeWidth','waistMm','waistPos','twistDeg','twistProfile','pattern','patternAmpMm',
   'patternFreq','patternYFreq','patternMirror',
   'veinsEnabled','veinCount','veinAmplitudeMm','veinTurns','veinTiltDeg','veinWidth','veinValleyMm',
   'radialSegments','heightSegments','patternEdgeFade',
@@ -141,7 +145,7 @@ const presetKeys = [
   // MIN_WALL_THICKNESS (1.2 mm), no UI control.
   // 'exportTarget' removed — when inner is enabled, BOTH STL files are sent.
   'doubleShadeEnabled',
-  'innerTopDiameter','innerBulgeMm','innerBulgePos','innerWaistMm','innerWaistPos',
+  'innerTopDiameter','innerBulgeMm','innerBulgePos','innerBulgeWidth','innerWaistMm','innerWaistPos',
   'innerTwistDeg','innerTwistProfile','innerPattern','innerPatternAmpMm','innerPatternFreq',
   'innerPatternYFreq','innerPatternMirror','innerPatternEdgeFade',
   'innerRadialSegments','innerHeightSegments',
@@ -152,7 +156,7 @@ const defaultControlValues: Record<string, unknown> = {
   height: 160, topDiameter: 55,
   // thickness removed from UI — fixed at MIN_WALL_THICKNESS (1.2 mm) for both
   // outer and inner shades (printer constraint).
-  bulgeMm: 18, bulgePos: 0.55, waistMm: 10, waistPos: 0.35,
+  bulgeMm: 18, bulgePos: 0.55, bulgeWidth: 0.18, waistMm: 10, waistPos: 0.35,
   twistDeg: 0, twistProfile: 'linear', pattern: 'ribsRect',
   patternAmpMm: 2.8, patternFreq: 28, patternYFreq: 1.0,
   radialSegments: 120, heightSegments: 96,
@@ -169,7 +173,7 @@ const defaultControlValues: Record<string, unknown> = {
   // (cylinder) or higher. We use 120 mm as a sane default (slightly wider than
   // base, gives a visible "cone" shape on first enable).
   innerTopDiameter: 120,
-  innerBulgeMm: 10, innerBulgePos: 0.5, innerWaistMm: 5, innerWaistPos: 0.4,
+  innerBulgeMm: 10, innerBulgePos: 0.5, innerBulgeWidth: 0.18, innerWaistMm: 5, innerWaistPos: 0.4,
   innerTwistDeg: 0, innerTwistProfile: 'linear', innerPattern: 'ribsRect',
   innerPatternAmpMm: 2.0, innerPatternFreq: 20, innerPatternYFreq: 1.0,
   innerPatternMirror: false, innerPatternEdgeFade: true,
@@ -217,6 +221,7 @@ function buildSchema(lang: Lang, saved: Record<string, unknown>): any {
     },
     innerBulgeMm: { label: t('innerBulgeMm',lang), value: s('innerBulgeMm') as number, min: 0, max: 40, step: 0.5 },
     innerBulgePos: { label: t('innerBulgePos',lang), value: s('innerBulgePos') as number, min: 0, max: 1, step: 0.01 },
+    innerBulgeWidth: { label: t('innerBulgeWidth',lang), value: s('innerBulgeWidth') as number, min: 0.05, max: 0.5, step: 0.01 },
     // innerWaistMm / innerWaistPos REMOVED per spec (no hourglass on inner shade)
     innerTwistProfile: { label: t('innerTwistProfile',lang), options: { [t('twistLinear',lang)]: 'linear', [t('twistEaseInOut',lang)]: 'easeInOut', [t('twistSine',lang)]: 'sine' }, value: s('innerTwistProfile') as string },
     innerTwistDeg: { label: t('innerTwistDeg',lang), value: s('innerTwistDeg') as number, min: -1080, max: 1080, step: 5 },
@@ -258,6 +263,7 @@ function buildSchema(lang: Lang, saved: Record<string, unknown>): any {
     [t('fProfile',lang)]: folder({
       bulgeMm: { label: t('bulgeMm',lang), value: s('bulgeMm') as number, min: 0, max: 80, step: 0.5 },
       bulgePos: { label: t('bulgePos',lang), value: s('bulgePos') as number, min: 0, max: 1, step: 0.01 },
+      bulgeWidth: { label: t('bulgeWidth',lang), value: s('bulgeWidth') as number, min: 0.05, max: 0.5, step: 0.01 },
       // No auto-clamp on waistMm — per user feedback, the user is responsible
       // for keeping the outer's profile wide enough for the inner shade at
       // every height. The hint in the side panel reminds them.
@@ -514,7 +520,9 @@ function ControlsInner({
       // radialSegments / heightSegments no longer in Leva schema — read from savedRef.
       radialSegments: sNum('radialSegments'),
       heightSegments: sNum('heightSegments'),
-      bulgeMm: controls.bulgeMm, bulgePos: controls.bulgePos, waistMm: controls.waistMm, waistPos: controls.waistPos,
+      bulgeMm: controls.bulgeMm, bulgePos: controls.bulgePos,
+      bulgeWidth: (controls.bulgeWidth as number | undefined) ?? 0.18,
+      waistMm: controls.waistMm, waistPos: controls.waistPos,
       twistDeg: controls.twistDeg, twistProfile: controls.twistProfile as ShadeParams['twistProfile'],
       pattern: controls.pattern as ShadeParams['pattern'], patternAmpMm: controls.patternAmpMm,
       patternFreq: controls.patternFreq, patternYFreq: controls.patternYFreq,
@@ -544,6 +552,7 @@ function ControlsInner({
         thickness: MIN_WALL_THICKNESS,
         bulgeMm: controls.innerBulgeMm as number,
         bulgePos: controls.innerBulgePos as number,
+        bulgeWidth: (controls.innerBulgeWidth as number | undefined) ?? 0.18,
         // WAIST REMOVED from inner shade per spec — inner shade is a simple
         // bulged cone, no hourglass narrowing.
         waistMm: 0,
@@ -791,7 +800,7 @@ export default function App() {
         ])
         // Inner-shade-only keys — Leva only has these when doubleShadeEnabled
         const innerOnlyKeys = new Set([
-          'innerTopDiameter','innerBulgeMm','innerBulgePos',
+          'innerTopDiameter','innerBulgeMm','innerBulgePos','innerBulgeWidth',
           'innerTwistDeg','innerTwistProfile','innerPattern','innerPatternAmpMm',
           'innerPatternFreq','innerPatternYFreq','innerPatternMirror','innerPatternEdgeFade',
         ])
@@ -882,6 +891,11 @@ export default function App() {
       // fits inside the outer shade. The cap exists only to prevent the bulge,
       // waist, and pattern amplitudes from pushing the mesh beyond 100 mm radius
       // — it does NOT couple to the outer's topDiameter anymore.
+      //
+      // BUGFIX: Previously this call did NOT pass `externalBottom` /
+      // `externalBottomNormals`, so the exported inner STL used the parametric
+      // plug fallback instead of the actual InsideShadeBottom.stl. Now we pass
+      // `innerExternalBottom` so the exported STL matches the preview exactly.
       const innerEp: ShadeParams = {
         ...innerParamsToFull(innerParams, debouncedParams.height),
         radialSegments: Math.min(960, Math.round(innerParams.radialSegments * 4)),
@@ -889,6 +903,8 @@ export default function App() {
       }
       const innerMaxR = 100
       const g = buildShadeGeometry(innerEp, 4, {
+        externalBottom: innerExternalBottom?.positions ?? null,
+        externalBottomNormals: innerExternalBottom?.normals ?? null,
         baseRadiusOverride: INNER_BASE_RADIUS,
         yOffset: INNER_BASE_Y_OFFSET,
         maxRadius: innerMaxR,
@@ -946,7 +962,7 @@ export default function App() {
         setIsSending(false)
       }
     }, 50)
-  }, [params, innerParams, debouncedParams.height, isSending, customerName, orderTitle, lang, externalBottom])
+  }, [params, innerParams, debouncedParams.height, isSending, customerName, orderTitle, lang, externalBottom, innerExternalBottom])
 
   return (
     <div className="app">
@@ -1065,6 +1081,7 @@ function buildParamsFromSaved(saved: Record<string, unknown>): ShadeParams {
     thickness: MIN_WALL_THICKNESS,
     radialSegments: s('radialSegments') as number, heightSegments: s('heightSegments') as number,
     bulgeMm: s('bulgeMm') as number, bulgePos: s('bulgePos') as number,
+    bulgeWidth: (s('bulgeWidth') as number | undefined) ?? 0.18,
     waistMm: s('waistMm') as number, waistPos: s('waistPos') as number,
     twistDeg: s('twistDeg') as number, twistProfile: s('twistProfile') as ShadeParams['twistProfile'],
     pattern: s('pattern') as ShadeParams['pattern'], patternAmpMm: s('patternAmpMm') as number,
@@ -1097,6 +1114,7 @@ function innerParamsToFull(inner: InnerShadeParams, outerHeight: number): ShadeP
     heightSegments: inner.heightSegments,
     bulgeMm: inner.bulgeMm,
     bulgePos: inner.bulgePos,
+    bulgeWidth: inner.bulgeWidth ?? 0.18,
     // Inner waist FORCED to 0 per spec.
     waistMm: 0,
     waistPos: 0.4,
